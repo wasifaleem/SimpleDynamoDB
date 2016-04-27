@@ -67,7 +67,7 @@ public class Dynamo {
             serverSocket.setReuseAddress(true);
             new ServerTask(context)
                     .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
-            db.drop();
+//            db.drop();
             Payload recoverRequest = Payload.recoverRequest(myPort);
             List<String> recoveryNodes = DynamoRing.recoveryNodes(myPort);
             REPLIES_COUNT.put(recoverRequest.getSessionId(), new AtomicInteger(0));
@@ -201,7 +201,7 @@ public class Dynamo {
                     }
                     case ALL: {
                         if (REPLIES_COUNT.get(payload.getSessionId()).get()
-                                == (DynamoRing.liveNodeCount(DynamoRing.allOtherNodes(myPort)))) {
+                                == (DynamoRing.liveNodeCount(DynamoRing.allOtherNodes(myPort)) - 1)) {
                             SESSIONS.get(payload.getSessionId()).release();
                             Log.d(TAG, "QUERY REPLY FOR ALL COMPLETED: " + payload);
                         } else {
@@ -380,13 +380,20 @@ public class Dynamo {
 
                 sendTo(DynamoRing.allOtherNodes(myPort), query);
 
-                SESSIONS.get(query.getSessionId()).acquireUninterruptibly();
-                for (Map.Entry<String, String> entry : REPLIES.get(query.getSessionId()).entrySet()) {
-                    result.addRow(new String[]{entry.getKey(), entry.getValue()});
+                try {
+                    if (SESSIONS.get(query.getSessionId()).tryAcquire(4, TimeUnit.SECONDS)) {
+                        for (Map.Entry<String, String> entry : REPLIES.get(query.getSessionId()).entrySet()) {
+                            result.addRow(new String[]{entry.getKey(), entry.getValue()});
+                        }
+                        REPLIES.remove(query.getSessionId());
+                        REPLIES_COUNT.remove(query.getSessionId());
+                        SESSIONS.remove(query.getSessionId());
+                    } else {
+                        Log.w(TAG, "Timed out while querying ALL");
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(TAG, "Interrupted while querying ALL", e);
                 }
-                REPLIES.remove(query.getSessionId());
-                REPLIES_COUNT.remove(query.getSessionId());
-                SESSIONS.remove(query.getSessionId());
 
                 return result;
             }
@@ -451,7 +458,7 @@ public class Dynamo {
                             return result;
                         }
                     } catch (InterruptedException e) {
-                        Log.e(TAG, "Interrupted while waiting for ACK", e);
+                        Log.e(TAG, "Interrupted while querying coordinator", e);
                         return null;
                     }
                 }
