@@ -5,7 +5,6 @@ import android.util.Log;
 import android.util.Pair;
 
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -14,7 +13,7 @@ import java.util.Set;
 
 public class ClientTask extends AsyncTask<Pair<String, Payload>, Void, Set<ClientTask.Result>> {
     private static final String TAG = ClientTask.class.getName();
-    public static final int TIMEOUT = 100;
+    public static final int TIMEOUT = 200;
 
     @Override
     protected Set<ClientTask.Result> doInBackground(Pair<String, Payload>... payloads) { // <to, payload>

@@ -55,6 +55,7 @@ public class Payload {
 
     public static Payload deserialize(String json) {
         try {
+//            Log.d(TAG, "Deserialize json " + json);
             JSONObject jsonObject = new JSONObject(json);
             Payload payload = new Payload();
             if (!jsonObject.isNull("sessionId")) {

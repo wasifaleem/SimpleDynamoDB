@@ -84,14 +84,6 @@ public class DynamoRing {
         Collections.sort(RING);
         Log.d(TAG, "Dynamo Ring: " + RING);
     }
-//
-//    private boolean inLocalPartition(String keyHash, String nodeId) { // nodeId is port
-//        String nodeHash = NODES_HASH.get(nodeId);
-//        String predecessorHash = RING.get(RING.indexOf(nodeHash) - 1);
-//
-//        return (predecessorHash.compareTo(nodeHash) > 0 && (keyHash.compareTo(predecessorHash) > 0 || keyHash.compareTo(nodeHash) <= 0))
-//                || (keyHash.compareTo(predecessorHash) > 0 && keyHash.compareTo(nodeHash) <= 0);
-//    }
 
     public static LinkedHashSet<String> preferenceListForKey(String key) {
         LinkedHashSet<String> s = new LinkedHashSet<>(N + 1);
@@ -125,10 +117,12 @@ public class DynamoRing {
     public static List<String> recoveryNodes(String port) {
         int index = RING.indexOf(NODES_HASH.get(port));
         List<String> nodes = new ArrayList<>(4);
+//        nodes.add(HASH_NODE.get(RING.get(index + 3)));
         nodes.add(HASH_NODE.get(RING.get(index + 2)));
         nodes.add(HASH_NODE.get(RING.get(index + 1)));
         nodes.add(HASH_NODE.get(RING.get(index - 2)));
         nodes.add(HASH_NODE.get(RING.get(index - 1)));
+//        nodes.add(HASH_NODE.get(RING.get(index - 3)));
         Log.d(TAG, "Recovery nodes for: " + port + " : " + nodes);
         return nodes;
     }
@@ -153,14 +147,14 @@ public class DynamoRing {
 
     public static void markOnline(String node) {
         if (OFFLINE_NODES.contains(node)) {
-            Log.d(TAG, "ONLINE: node :" + node);
+            Log.e(TAG, "ONLINE: node :" + node);
             OFFLINE_NODES.remove(node);
         }
     }
 
     public static void markOffline(String node) {
         if (OFFLINE_NODES.add(node)) {
-            Log.d(TAG, "OFFLINE: node :" + node);
+            Log.e(TAG, "OFFLINE: node :" + node);
         }
     }
 
