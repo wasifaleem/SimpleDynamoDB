@@ -4,10 +4,10 @@ import android.os.AsyncTask;
 import android.util.Log;
 import android.util.Pair;
 
-import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -25,11 +25,12 @@ public class ClientTask extends AsyncTask<Pair<String, Payload>, Void, Set<Clien
                     Integer.parseInt(node));
                  OutputStream out = socket.getOutputStream()) {
 
-                ObjectOutputStream objectOutputStream = new ObjectOutputStream(out);
-                objectOutputStream.writeObject(payloadPair.second);
-                objectOutputStream.flush();
-                out.flush();
-                results.add(new Result(true, node));
+                String serialized = payloadPair.second.serialize();
+                if (serialized != null) {
+                    out.write(serialized.getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                    results.add(new Result(true, node));
+                }
             } catch (Exception e) {
                 results.add(new Result(false, node));
                 Log.e(TAG, "ClientTask socket Exception" + " while sending to " + node, e); // offline?

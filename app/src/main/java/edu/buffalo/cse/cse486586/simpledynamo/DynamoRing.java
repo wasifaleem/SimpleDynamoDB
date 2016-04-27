@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -92,6 +93,14 @@ public class DynamoRing {
 //                || (keyHash.compareTo(predecessorHash) > 0 && keyHash.compareTo(nodeHash) <= 0);
 //    }
 
+    public static LinkedHashSet<String> preferenceListForKey(String key) {
+        LinkedHashSet<String> s = new LinkedHashSet<>(N + 1);
+        String coordinator = coordinatorForKey(key);
+        s.add(coordinator);
+        s.addAll(replicasForCoordinator(coordinator));
+        return s;
+    }
+
     public static String coordinatorForKey(String key) {
         String keyHash = genHash(key);
 
@@ -115,7 +124,8 @@ public class DynamoRing {
 
     public static List<String> recoveryNodes(String port) {
         int index = RING.indexOf(NODES_HASH.get(port));
-        List<String> nodes = new ArrayList<>(N - 1);
+        List<String> nodes = new ArrayList<>(4);
+        nodes.add(HASH_NODE.get(RING.get(index + 2)));
         nodes.add(HASH_NODE.get(RING.get(index + 1)));
         nodes.add(HASH_NODE.get(RING.get(index - 2)));
         nodes.add(HASH_NODE.get(RING.get(index - 1)));
@@ -152,5 +162,15 @@ public class DynamoRing {
         if (OFFLINE_NODES.add(node)) {
             Log.d(TAG, "OFFLINE: node :" + node);
         }
+    }
+
+    public static int liveNodeCount(List<String> nodes) {
+        int online = 0;
+        for (String node : nodes) {
+            if (!isOffline(node)) {
+                online++;
+            }
+        }
+        return online;
     }
 }

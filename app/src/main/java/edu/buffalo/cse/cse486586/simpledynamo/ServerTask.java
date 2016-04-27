@@ -6,9 +6,7 @@ import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.ObjectInputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
@@ -26,18 +24,21 @@ class ServerTask extends AsyncTask<ServerSocket, String, Void> {
         ServerSocket serverSocket = sockets[0];
         while (true) {
             try (Socket socket = serverSocket.accept();
-                 InputStream in = socket.getInputStream()) {
+                 BufferedReader br = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
-                ObjectInputStream objectInputStream = new ObjectInputStream(in);
-                Payload payload = (Payload) objectInputStream.readObject();
-
-                Dynamo.get(context).handle(payload);
+                StringBuilder total = new StringBuilder();
+                String line;
+                while ((line = br.readLine()) != null) {
+                    total.append(line);
+                }
+                Payload payload = Payload.deserialize(total.toString());
+                if (payload != null) {
+                    Dynamo.get(context).handle(payload);
+                }
             } catch (UnknownHostException e) {
                 Log.e(TAG, "ServerTask UnknownHostException", e);
             } catch (IOException e) {
                 Log.e(TAG, "ServerTask socket IOException", e);
-            } catch (ClassNotFoundException e) {
-                Log.e(TAG, "ServerTask socket ClassNotFoundException", e);
             } catch (NullPointerException e) {
                 Log.e(TAG, "ServerTask NullPointerException", e);
             } catch (Exception e) {

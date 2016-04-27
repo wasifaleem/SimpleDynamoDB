@@ -1,14 +1,18 @@
 package edu.buffalo.cse.cse486586.simpledynamo;
 
-import java.io.Serializable;
+import android.util.Log;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-public class Payload implements Serializable {
+public class Payload {
     private static final String TAG = Payload.class.getName();
-    private static final long serialVersionUID = -6229103345195763019L;
 
     private UUID sessionId = UUID.randomUUID();
     private MessageType messageType;
@@ -32,11 +36,60 @@ public class Payload implements Serializable {
         this.queryResults = copy.queryResults;
     }
 
-//    public Payload sessionId(UUID sessionId) {
-//        Payload payload = new Payload(this);
-//        payload.sessionId = sessionId;
-//        return payload;
-//    }
+    public String serialize() {
+        try {
+            JSONObject jsonObject = new JSONObject()
+                    .put("sessionId", sessionId)
+                    .put("fromPort", fromPort)
+                    .put("messageType", messageType)
+                    .put("nodeType", nodeType)
+                    .put("key", key)
+                    .put("value", value)
+                    .put("queryResults", new JSONObject(queryResults));
+            return jsonObject.toString();
+        } catch (JSONException e) {
+            Log.e(TAG, "Cannot serialize payload " + toString(), e);
+        }
+        return null;
+    }
+
+    public static Payload deserialize(String json) {
+        try {
+            JSONObject jsonObject = new JSONObject(json);
+            Payload payload = new Payload();
+            if (!jsonObject.isNull("sessionId")) {
+                payload.sessionId = UUID.fromString(jsonObject.getString("sessionId"));
+            }
+
+            if (!jsonObject.isNull("fromPort")) {
+                payload.fromPort = jsonObject.getString("fromPort");
+            }
+            if (!jsonObject.isNull("messageType")) {
+                payload.messageType = MessageType.valueOf(jsonObject.getString("messageType"));
+            }
+            if (!jsonObject.isNull("nodeType")) {
+                payload.nodeType = NodeType.valueOf(jsonObject.getString("nodeType"));
+            }
+            if (!jsonObject.isNull("key")) {
+                payload.key = jsonObject.getString("key");
+            }
+            if (!jsonObject.isNull("value")) {
+                payload.value = jsonObject.getString("value");
+            }
+            if (!jsonObject.isNull("queryResults")) {
+                JSONObject queryResults = jsonObject.getJSONObject("queryResults");
+                Iterator<String> keys = queryResults.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    payload.queryResults.put(key, queryResults.getString(key));
+                }
+            }
+            return payload;
+        } catch (JSONException e) {
+            Log.e(TAG, "Cannot deserialize: " + json, e);
+        }
+        return null;
+    }
 
     public Payload messageType(MessageType messageType) {
         Payload payload = new Payload(this);
