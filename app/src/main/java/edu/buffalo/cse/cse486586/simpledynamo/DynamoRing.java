@@ -93,6 +93,13 @@ public class DynamoRing {
         return s;
     }
 
+    public static LinkedHashSet<String> preferenceListForNode(String node) {
+        LinkedHashSet<String> s = new LinkedHashSet<>(N);
+        s.add(node);
+        s.addAll(replicasForCoordinator(node));
+        return s;
+    }
+
     public static String coordinatorForKey(String key) {
         String keyHash = genHash(key);
 
@@ -117,12 +124,10 @@ public class DynamoRing {
     public static List<String> recoveryNodes(String port) {
         int index = RING.indexOf(NODES_HASH.get(port));
         List<String> nodes = new ArrayList<>(4);
-//        nodes.add(HASH_NODE.get(RING.get(index + 3)));
         nodes.add(HASH_NODE.get(RING.get(index + 2)));
         nodes.add(HASH_NODE.get(RING.get(index + 1)));
         nodes.add(HASH_NODE.get(RING.get(index - 2)));
         nodes.add(HASH_NODE.get(RING.get(index - 1)));
-//        nodes.add(HASH_NODE.get(RING.get(index - 3)));
         Log.d(TAG, "Recovery nodes for: " + port + " : " + nodes);
         return nodes;
     }

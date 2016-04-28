@@ -22,6 +22,7 @@ public class Payload {
     private String key;
     private String value;
     private Map<String, String> queryResults = new HashMap<>();
+    private boolean ack = false;
 
     public Payload() {
     }
@@ -30,6 +31,7 @@ public class Payload {
         this.sessionId = copy.sessionId;
         this.messageType = copy.messageType;
         this.nodeType = copy.nodeType;
+        this.ack = copy.ack;
         this.fromPort = copy.fromPort;
         this.key = copy.key;
         this.value = copy.value;
@@ -43,6 +45,7 @@ public class Payload {
                     .put("fromPort", fromPort)
                     .put("messageType", messageType)
                     .put("nodeType", nodeType)
+                    .put("ack", ack)
                     .put("key", key)
                     .put("value", value)
                     .put("queryResults", new JSONObject(queryResults));
@@ -71,6 +74,9 @@ public class Payload {
             if (!jsonObject.isNull("nodeType")) {
                 payload.nodeType = NodeType.valueOf(jsonObject.getString("nodeType"));
             }
+            if (!jsonObject.isNull("ack")) {
+                payload.ack = jsonObject.getBoolean("ack");
+            }
             if (!jsonObject.isNull("key")) {
                 payload.key = jsonObject.getString("key");
             }
@@ -95,6 +101,12 @@ public class Payload {
     public Payload messageType(MessageType messageType) {
         Payload payload = new Payload(this);
         payload.messageType = messageType;
+        return payload;
+    }
+
+    public Payload ack(boolean ack) {
+        Payload payload = new Payload(this);
+        payload.ack = ack;
         return payload;
     }
 
@@ -134,16 +146,6 @@ public class Payload {
         return payload;
     }
 
-    public static Payload ack(NodeType nodeType, String fromPort, UUID sessionId, String key) {
-        Payload payload = new Payload();
-        payload.sessionId = sessionId;
-        payload.fromPort = fromPort;
-        payload.key = key;
-        payload.messageType = MessageType.ACK;
-        payload.nodeType = nodeType;
-        return payload;
-    }
-
     public static Payload delete(String fromPort, String key, NodeType nodeType) {
         Payload payload = new Payload();
         payload.fromPort = fromPort;
@@ -158,15 +160,6 @@ public class Payload {
         payload.fromPort = fromPort;
         payload.key = key;
         payload.messageType = MessageType.QUERY_REQUEST;
-        payload.nodeType = nodeType;
-        return payload;
-    }
-
-    public static Payload queryReply(String fromPort, UUID queryId, NodeType nodeType) {
-        Payload payload = new Payload();
-        payload.fromPort = fromPort;
-        payload.sessionId = queryId;
-        payload.messageType = MessageType.QUERY_REPLY;
         payload.nodeType = nodeType;
         return payload;
     }
@@ -234,12 +227,21 @@ public class Payload {
         this.queryResults = queryResults;
     }
 
+    public boolean isAck() {
+        return ack;
+    }
+
+    public void setAck(boolean ack) {
+        this.ack = ack;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         Payload payload = (Payload) o;
-        return Objects.equals(sessionId, payload.sessionId) &&
+        return ack == payload.ack &&
+                Objects.equals(sessionId, payload.sessionId) &&
                 messageType == payload.messageType &&
                 nodeType == payload.nodeType &&
                 Objects.equals(fromPort, payload.fromPort) &&
@@ -250,19 +252,20 @@ public class Payload {
 
     @Override
     public int hashCode() {
-        return Objects.hash(sessionId, messageType, nodeType, fromPort, key, value, queryResults);
+        return Objects.hash(sessionId, messageType, nodeType, fromPort, key, value, queryResults, ack);
     }
 
     @Override
     public String toString() {
         final StringBuilder sb = new StringBuilder("Payload{");
-        sb.append("sessionId=").append(sessionId);
-        sb.append(", messageType=").append(messageType);
-        sb.append(", nodeType=").append(nodeType);
-        sb.append(", fromPort='").append(fromPort).append('\'');
-        sb.append(", key='").append(key).append('\'');
-        sb.append(", value='").append(value).append('\'');
-        sb.append(", queryResults=").append(queryResults);
+        sb.append("{mt=").append(messageType);
+        sb.append(", nt=").append(nodeType);
+        sb.append(", ack=").append(ack);
+        sb.append(", s=").append(sessionId);
+        sb.append(", f='").append(fromPort).append('\'');
+        sb.append(", k='").append(key).append('\'');
+        sb.append(", v='").append(value).append('\'');
+        sb.append(", r=").append(queryResults);
         sb.append('}');
         return sb.toString();
     }

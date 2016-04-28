@@ -17,7 +17,7 @@ import java.net.UnknownHostException;
 class ServerTask extends AsyncTask<ServerSocket, StringBuilder, Void> {
     private static final String TAG = ServerTask.class.getName();
     private final Context context;
-    public static final int TIMEOUT = 300;
+    public static final int TIMEOUT = 500;
 
     public ServerTask(Context context) {
         this.context = context;
@@ -26,11 +26,11 @@ class ServerTask extends AsyncTask<ServerSocket, StringBuilder, Void> {
     @Override
     protected Void doInBackground(ServerSocket... sockets) {
         ServerSocket serverSocket = sockets[0];
-        int port = 0;
+        String port = "0";
         while (true) {
             try (Socket socket = serverSocket.accept();
                  BufferedReader br = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
-                port = socket.getPort();
+                port = socket.getRemoteSocketAddress().toString();
                 socket.setSoTimeout(TIMEOUT);
                 StringBuilder total = new StringBuilder(200);
                 String line;
@@ -60,7 +60,12 @@ class ServerTask extends AsyncTask<ServerSocket, StringBuilder, Void> {
                 if (!json.isEmpty()) {
                     final Payload payload = Payload.deserialize(json);
                     if (payload != null) {
-                        Dynamo.get(context).handle(payload);
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Dynamo.get(context).handle(payload);
+                            }
+                        }).start();
                     }
                 }
             }

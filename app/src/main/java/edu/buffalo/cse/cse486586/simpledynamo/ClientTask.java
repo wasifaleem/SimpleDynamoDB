@@ -13,7 +13,7 @@ import java.util.Set;
 
 public class ClientTask extends AsyncTask<Pair<String, Payload>, Void, Set<ClientTask.Result>> {
     private static final String TAG = ClientTask.class.getName();
-    public static final int TIMEOUT = 200;
+    public static final int TIMEOUT = 500;
 
     @Override
     protected Set<ClientTask.Result> doInBackground(Pair<String, Payload>... payloads) { // <to, payload>

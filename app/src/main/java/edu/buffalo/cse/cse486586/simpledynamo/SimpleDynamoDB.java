@@ -61,4 +61,14 @@ public class SimpleDynamoDB extends SQLiteOpenHelper {
     public Cursor all() {
         return getWritableDatabase().rawQuery("SELECT * from " + TABLE, null);
     }
+
+    public long count() {
+        long count = 0;
+        try (Cursor cursor = getWritableDatabase().rawQuery("SELECT count(*) from " + TABLE, null)) {
+            while (cursor.moveToNext()) {
+                count += cursor.getLong(0);
+            }
+        }
+        return count;
+    }
 }
