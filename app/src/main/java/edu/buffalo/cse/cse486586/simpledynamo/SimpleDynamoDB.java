@@ -32,7 +32,7 @@ public class SimpleDynamoDB extends SQLiteOpenHelper {
 
     @Override
     public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT, version INTEGER)");
         Log.w(TAG, "Created DB");
     }
 
@@ -55,11 +55,11 @@ public class SimpleDynamoDB extends SQLiteOpenHelper {
     }
 
     public Cursor query(String key) {
-        return getWritableDatabase().rawQuery("SELECT * from " + TABLE + " where key = ?", new String[]{key});
+        return getWritableDatabase().rawQuery("SELECT key,value,version from " + TABLE + " where key = ?", new String[]{key});
     }
 
     public Cursor all() {
-        return getWritableDatabase().rawQuery("SELECT * from " + TABLE, null);
+        return getWritableDatabase().rawQuery("SELECT key,value,version from " + TABLE, null);
     }
 
     public long count() {
@@ -70,5 +70,9 @@ public class SimpleDynamoDB extends SQLiteOpenHelper {
             }
         }
         return count;
+    }
+
+    public Cursor version(String key) {
+        return getWritableDatabase().rawQuery("SELECT max(version) from " + TABLE + " where key = ?", new String[]{key});
     }
 }

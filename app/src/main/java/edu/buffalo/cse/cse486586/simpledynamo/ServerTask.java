@@ -17,7 +17,7 @@ import java.net.UnknownHostException;
 class ServerTask extends AsyncTask<ServerSocket, StringBuilder, Void> {
     private static final String TAG = ServerTask.class.getName();
     private final Context context;
-    public static final int TIMEOUT = 500;
+    public static final int TIMEOUT = 800;
 
     public ServerTask(Context context) {
         this.context = context;
@@ -45,7 +45,7 @@ class ServerTask extends AsyncTask<ServerSocket, StringBuilder, Void> {
             } catch (NullPointerException e) {
                 Log.e(TAG, "ServerTask NullPointerException", e);
             } catch (SocketTimeoutException | StreamCorruptedException | EOFException e) {
-                Log.e(TAG, "ServerTask socket timeout at: " + port, e); // TODO: mark node offline?
+                Log.e(TAG, "ServerTask socket timeout at: " + port, e);
             } catch (Exception e) {
                 Log.e(TAG, "ServerTask Exception", e);
             }
@@ -60,8 +60,8 @@ class ServerTask extends AsyncTask<ServerSocket, StringBuilder, Void> {
                 if (!json.isEmpty()) {
                     final Payload payload = Payload.deserialize(json);
                     if (payload != null) {
-                        new Thread(new Runnable() {
-                            @Override
+                        new Thread(new Runnable() { // NOTE: we do not need AsyncTask here, because we do not interact with UI
+                            @Override               // use a thread pool/Executor?
                             public void run() {
                                 Dynamo.get(context).handle(payload);
                             }

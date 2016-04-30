@@ -12,12 +12,16 @@ import android.util.Pair;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static edu.buffalo.cse.cse486586.simpledynamo.Payload.MessageType.RECOVERY_REPLY;
 import static edu.buffalo.cse.cse486586.simpledynamo.Payload.NodeType.COORDINATOR;
@@ -28,12 +32,14 @@ import static edu.buffalo.cse.cse486586.simpledynamo.Util.LOCAL;
 public class Dynamo {
     public static final int SERVER_PORT = 10000;
     private static final String TAG = Dynamo.class.getName();
-    public static final int TIMEOUT = 2000;
+    public static final int TIMEOUT = 1500; // ms
     private static Dynamo INSTANCE = null;
 
-    private static Map<UUID, Map<String, String>> REPLIES = new ConcurrentHashMap<>();
+    // used to aggregate query replies
+    private static Map<UUID, Map<String, Payload.Value>> REPLIES = new ConcurrentHashMap<>();
+    // used to track request/response sessions and wait.
     private static Map<UUID, Semaphore> SESSIONS = new ConcurrentHashMap<>();
-
+    private static AtomicLong version = new AtomicLong(1);
     private final Context context;
     private final SimpleDynamoDB db;
     private String myId;
@@ -66,9 +72,10 @@ public class Dynamo {
             serverSocket.setReuseAddress(true);
             new ServerTask(context)
                     .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
-            //db.drop(); // TODO: ensure correctness in replication, remove this later.
 
             if (db.count() > 0) {
+                db.drop();
+
                 // Start recovery
                 Payload recoverRequest = track(Payload.recoverRequest(myPort), 4);
                 List<String> recoveryNodes = DynamoRing.recoveryNodes(myPort);
@@ -90,14 +97,12 @@ public class Dynamo {
             case INSERT: {
                 switch (payload.getNodeType()) {
                     case COORDINATOR: {
-                        // Send ack.
-                        // sendAck(payload);
-
                         // Insert
+                        payload = payload.version(newVersionNumber(payload.getKey())).fromPort(myPort);
                         dbInsert(payload);
                         Log.v(TAG, "Coordinator Inserted " + payload.getValue());
 
-                        // Forward to replicas
+                        // Forward to replicas, by using chain replication
                         List<String> replicas = DynamoRing.replicasForCoordinator(myPort);
 
                         Payload replicaInsert1 = payload.nodeType(REPLICA);
@@ -105,9 +110,9 @@ public class Dynamo {
                         sendTo(replicas.get(1), replicaInsert2);
                         sendTo(replicas.get(0), replicaInsert1);
 
-                        // wait for ACK
-                        if (waitForCompletion(replicaInsert2.getSessionId(), 2000, TimeUnit.MILLISECONDS)) {
-                            Log.d(TAG, "Received INSERT ACK from Replicas");
+                        // wait for ACK from last replica. i.e chain replication
+                        if (waitForCompletion(replicaInsert2.getSessionId(), TIMEOUT, TimeUnit.MILLISECONDS)) {
+                            Log.d(TAG, "Received INSERT ACK from last replica");
                         } else {
                             Log.w(TAG, "Replica INSERT TimedOut " + replicaInsert2);
                         }
@@ -115,9 +120,14 @@ public class Dynamo {
                     }
                     case REPLICA: {
                         if (payload.isAck()) {
-                            // Send ack.
+                            // Send ack if requested.
                             sendAck(payload);
                         }
+                        boolean fromCoordinator = DynamoRing.coordinatorForKey(payload.getKey()).equals(payload.getFromPort());
+                        if (!fromCoordinator) {
+                            payload = payload.version(newVersionNumber(payload.getKey()));
+                        }
+
                         // Insert
                         dbInsert(payload);
                         Log.v(TAG, "Replica Inserted " + payload);
@@ -136,8 +146,6 @@ public class Dynamo {
                         sendTo(replicas, payload.fromPort(myPort).nodeType(REPLICA));
                         break;
                     }
-                    default:
-                        break;
                 }
                 switch (payload.getKey()) {
                     case ALL: {
@@ -148,12 +156,14 @@ public class Dynamo {
                     default: {
                         Log.d(TAG, "DELETE : " + payload);
                         db.delete(payload.getKey());
+                        break;
                     }
                 }
                 break;
             }
             case QUERY_REQUEST: {
                 waitForRecovery();
+
                 switch (payload.getKey()) {
                     case ALL: {
                         Log.d(TAG, "QUERY REQUEST ALL " + payload);
@@ -161,7 +171,7 @@ public class Dynamo {
                         Payload queryReply = payload.fromPort(myPort).messageType(Payload.MessageType.QUERY_REPLY);
                         try (Cursor cursor = db.all()) {
                             while (cursor.moveToNext()) {
-                                queryReply.getQueryResults().put(cursor.getString(0), cursor.getString(1));
+                                queryReply.getQueryResults().put(cursor.getString(0), new Payload.Value(cursor.getString(1), cursor.getLong(2)));
                             }
                         }
                         sendTo(payload.getFromPort(), queryReply);
@@ -171,67 +181,17 @@ public class Dynamo {
                     default: {
                         Log.d(TAG, "QUERY REQUEST Key " + payload);
 
-                        switch (payload.getNodeType()) {
-//                            case COORDINATOR: {
-//                                Payload replicaQuery = track(Payload.queryRequest(myPort, payload.getKey(), REPLICA), 2);
-//
-//                                List<String> replicas = DynamoRing.replicasForCoordinator(myPort);
-//                                sendTo(replicas, replicaQuery);
-//
-//                                // wait for reply from replica's
-//                                if (waitForCompletion(replicaQuery.getSessionId(), 1000, TimeUnit.MILLISECONDS)) {
-//                                    Log.d(TAG, "Received Query Replies from Replica's");
-//                                } else {
-//                                    Log.d(TAG, "TimedOut while waiting for Query Replies from Replica's");
-//                                }
-//
-//                                Payload queryReply = payload.fromPort(myPort).messageType(Payload.MessageType.QUERY_REPLY);
-//
-//                                for (Map.Entry<String, String> entry : REPLIES.get(replicaQuery.getSessionId()).entrySet()) {
-//                                    queryReply.getQueryResults().put(entry.getKey(), entry.getValue());
-//                                }
-//
-//                                Map<String, String> localResults = new HashMap<>();
-//                                try (Cursor cursor = db.query(payload.getKey())) {
-//                                    while (cursor.moveToNext()) {
-//                                        localResults.put(cursor.getString(0), cursor.getString(1));
-//                                    }
-//                                }
-//                                queryReply.getQueryResults().putAll(localResults);
-//
-//                                if (!queryReply.getQueryResults().isEmpty()) {
-//                                    sendTo(payload.getFromPort(), queryReply);
-//                                } else {
-//                                    Log.e(TAG, "COORDINATOR Watch out for inconsistency!");
-//                                }
-//
-//                                if (localResults.isEmpty()) { // resolve local inconsistency from replicas
-//                                    if (!REPLIES.get(replicaQuery.getSessionId()).isEmpty()) {
-//                                        for (Map.Entry<String, String> entry : REPLIES.get(replicaQuery.getSessionId()).entrySet()) {
-//                                            dbInsert(entry);
-//                                        }
-//                                    }
-//                                }
-//
-//                                break;
-//                            }
-                            default: {
-                                Payload queryReply = payload.fromPort(myPort).messageType(Payload.MessageType.QUERY_REPLY);
-                                try (Cursor cursor = db.query(payload.getKey())) {
-                                    while (cursor.moveToNext()) {
-                                        queryReply.getQueryResults().put(cursor.getString(0), cursor.getString(1));
-                                    }
-                                }
-                                if (queryReply.getQueryResults().isEmpty()) {
-                                    Log.e(TAG, payload.getNodeType() + " Watch out for inconsistency!");
-                                } else {
-                                    sendTo(payload.getFromPort(), queryReply);
-                                }
-
-                                break;
+                        Payload queryReply = payload.fromPort(myPort).messageType(Payload.MessageType.QUERY_REPLY);
+                        try (Cursor cursor = db.query(payload.getKey())) {
+                            while (cursor.moveToNext()) {
+                                queryReply.getQueryResults().put(cursor.getString(0), new Payload.Value(cursor.getString(1), cursor.getLong(cursor.getColumnIndex("version"))));
                             }
                         }
-
+                        if (queryReply.getQueryResults().isEmpty()) {
+                            Log.w(TAG, payload.getNodeType() + " Watch out for inconsistencies!");
+                        } else {
+                            sendTo(payload.getFromPort(), queryReply);
+                        }
                         break;
                     }
                 }
@@ -239,24 +199,13 @@ public class Dynamo {
             }
             case QUERY_REPLY: {
                 Log.d(TAG, "QUERY REPLY:" + payload);
-
                 REPLIES.get(payload.getSessionId()).putAll(payload.getQueryResults());
                 SESSIONS.get(payload.getSessionId()).release();
-
-                switch (payload.getNodeType()) {
-                    case COORDINATOR: {
-                        Log.d(TAG, "QUERY REPLY FROM COORDINATOR: COMPLETED " + payload);
-                        break;
-                    }
-                    case REPLICA: {
-                        Log.d(TAG, "QUERY REPLY FROM REPLICA: " + payload);
-                        break;
-                    }
-                }
                 break;
             }
             case RECOVERY_REQUEST: {
                 waitForRecovery();
+
                 Log.d(TAG, "RECOVERY REQUEST from:" + payload.getFromPort() + ": " + payload);
                 Payload recoveryReply = payload.fromPort(myPort).messageType(RECOVERY_REPLY);
                 long start = System.nanoTime();
@@ -264,22 +213,20 @@ public class Dynamo {
                     while (cursor.moveToNext()) {
                         String key = cursor.getString(0);
                         if (DynamoRing.preferenceListForKey(key).contains(payload.getFromPort())) {
-                            recoveryReply.getQueryResults().put(key, cursor.getString(1));
+                            recoveryReply.getQueryResults().put(key, new Payload.Value(cursor.getString(1), cursor.getLong(cursor.getColumnIndex("version"))));
                         }
                     }
                 }
-                Log.d(TAG, "RECOVERY REPLY TIME took: " + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
                 sendTo(payload.getFromPort(), recoveryReply);
+
+                Log.d(TAG, "RECOVERY REPLY TIME took: " + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
 
                 break;
             }
             case RECOVERY_REPLY: {
                 Log.d(TAG, "RECOVERY REPLY from:" + payload.getFromPort() + ": " + payload);
-                for (Map.Entry<String, String> entry : payload.getQueryResults().entrySet()) {
-                    ContentValues cv = new ContentValues(1);
-                    cv.put("key", entry.getKey());
-                    cv.put("value", entry.getValue());
-                    db.insert(cv);
+                for (Map.Entry<String, Payload.Value> entry : payload.getQueryResults().entrySet()) {
+                    dbInsert(entry);
                 }
                 SESSIONS.get(payload.getSessionId()).release();
                 break;
@@ -296,12 +243,15 @@ public class Dynamo {
 
         String coordinator = DynamoRing.coordinatorForKey(key);
         List<String> replicasForCoordinator = DynamoRing.replicasForCoordinator(coordinator);
+        long version = newVersionNumber(key);
 
         if (coordinator.equals(myPort)) {
+            values.put("version", version);
             db.insert(values);
             Log.v(TAG, "Coordinator Inserted " + values.toString());
 
-            Payload replicaInsert1 = Payload.insert(myPort, key, value, REPLICA);
+            // now replicate, wait for ack from last replica/partition (chain replication)
+            Payload replicaInsert1 = Payload.insert(myPort, key, value, REPLICA, version);
             Payload replicaInsert2 = track(replicaInsert1.ack(true));
             sendTo(replicasForCoordinator.get(1), replicaInsert2);
             sendTo(replicasForCoordinator.get(0), replicaInsert1);
@@ -315,17 +265,9 @@ public class Dynamo {
                 Log.w(TAG, "Replica INSERT TimedOut " + replicaInsert1);
             }
         } else {
-            if (replicasForCoordinator.contains(myPort)) {
-                Log.v(TAG, "Replica Inserted " + values.toString());
-                db.insert(values);
-            }
-
-            Payload insert = track(Payload.insert(myPort, key, value, COORDINATOR));
-            Payload replicaInsert = Payload.insert(myPort, key, value, REPLICA);
+            Payload insert = track(Payload.insert(myPort, key, value, COORDINATOR, version));
 
             sendTo(coordinator, insert);
-            sendTo(replicasForCoordinator.get(1), replicaInsert);
-            sendTo(replicasForCoordinator.get(0), replicaInsert);
             Log.d(TAG, "Sending INSERT to Coordinator:" + coordinator + " " + insert);
 
             // wait for ACK
@@ -336,12 +278,11 @@ public class Dynamo {
                 // timed out, i.e coordinator is down
                 // forward to replicas.
 
-                Payload replicaInsert1 = Payload.insert(myPort, key, value, REPLICA);
+                Payload replicaInsert1 = Payload.insert(myPort, key, value, REPLICA, version);
                 Payload replicaInsert2 = track(replicaInsert1.ack(true));
 
                 sendTo(replicasForCoordinator.get(1), replicaInsert2);
                 sendTo(replicasForCoordinator.get(0), replicaInsert1);
-                sendTo(coordinator, insert);
 
                 Log.d(TAG, "Forward INSERT to replicas " + replicasForCoordinator + " " + replicaInsert1);
 
@@ -349,7 +290,10 @@ public class Dynamo {
                 if (waitForCompletion(replicaInsert2.getSessionId(), TIMEOUT * 2, TimeUnit.MILLISECONDS)) {
                     Log.d(TAG, "Received INSERT ACK from Replicas");
                 } else {
-                    Log.w(TAG, "Replica INSERT TimedOut " + replicaInsert1);
+                    Log.e(TAG, "Replica INSERT TimedOut " + replicaInsert1);
+
+                    // try to send again to coordinator:
+                    sendTo(coordinator, insert);
                 }
             }
         }
@@ -419,174 +363,86 @@ public class Dynamo {
                 } else {
                     Log.w(TAG, "Timed out while querying ALL");
                 }
-                for (Map.Entry<String, String> entry : REPLIES.get(query.getSessionId()).entrySet()) {
-                    result.addRow(new String[]{entry.getKey(), entry.getValue()});
+
+                for (Map.Entry<String, Payload.Value> entry : REPLIES.get(query.getSessionId()).entrySet()) {
+                    result.addRow(new String[]{entry.getKey(), entry.getValue().getValue()});
                 }
 
                 return result;
             }
             case LOCAL: {
                 Log.d(TAG, "QUERY @ LOCAL");
-                return db.all();
+                MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
+                try (Cursor cursor = db.all()) {
+                    while (cursor.moveToNext()) {
+                        result.addRow(new String[]{cursor.getString(0), cursor.getString(1)});
+                    }
+                }
+                return result;
             }
             default: {
                 Log.d(TAG, "QUERY for key " + key);
 
+                MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
+
                 String coordinator = DynamoRing.coordinatorForKey(key);
                 List<String> replicas = DynamoRing.replicasForCoordinator(coordinator);
-                boolean isReplica = (replicas.contains(myPort));
 
-//                if (replicas.get(1).equals(myPort)) {
-//                    MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
-//                    try (Cursor cursor = db.query(key)) {
-//                        while (cursor.moveToNext()) {
-//                            result.addRow(new String[]{cursor.getString(0), cursor.getString(1)});
-//                            sendTo(DynamoRing.preferenceListForNode(coordinator), Payload.insert(myPort, cursor.getString(0), cursor.getString(1), REPLICA));
-//                        }
-//                    }
-//
-//                    return result;
-//                } else {
-                Payload replicaQuery1 = track(Payload.queryRequest(myPort, key, REPLICA));
-                sendTo(replicas.get(1), replicaQuery1);
+                Payload replicaQuery2 = track(Payload.queryRequest(myPort, key, REPLICA));
+                sendTo(replicas.get(1), replicaQuery2);
 
                 Payload coordinatorQuery = track(Payload.queryRequest(myPort, key, COORDINATOR));
                 sendTo(coordinator, coordinatorQuery);
 
-                Payload replicaQuery2 = track(Payload.queryRequest(myPort, key, REPLICA));
-                sendTo(replicas.get(0), replicaQuery2);
+                Payload replicaQuery1 = track(Payload.queryRequest(myPort, key, REPLICA));
+                sendTo(replicas.get(0), replicaQuery1);
 
-                // wait for reply from replica's
-                if (waitForCompletion(replicaQuery1.getSessionId(), TIMEOUT * 2, TimeUnit.MILLISECONDS)) {
-                    Log.d(TAG, "Received Query Replies from Replica's");
-                    MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
-                    for (Map.Entry<String, String> entry : REPLIES.get(replicaQuery1.getSessionId()).entrySet()) {
-                        result.addRow(new String[]{entry.getKey(), entry.getValue()});
-                        sendTo(DynamoRing.preferenceListForNode(coordinator), Payload.insert(myPort, entry.getKey(), entry.getValue(), REPLICA));
-                    }
-                    return result;
+                // wait for reply from responsible nodes
+                if (waitForCompletion(replicaQuery2.getSessionId(), TIMEOUT, TimeUnit.MILLISECONDS)) {
+                    Log.d(TAG, "Received last replica");
                 } else {
-                    Log.w(TAG, "TimedOut while waiting for Query Replies from Replica's");
+                    Log.w(TAG, "TimedOut while waiting for Query Replies from last replica");
+                }
 
-                    if (waitForCompletion(coordinatorQuery.getSessionId(), TIMEOUT * 2, TimeUnit.MILLISECONDS)) {
-                        Log.d(TAG, "Received Query Replies from Coordinator");
-                        MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
-                        for (Map.Entry<String, String> entry : REPLIES.get(coordinatorQuery.getSessionId()).entrySet()) {
-                            result.addRow(new String[]{entry.getKey(), entry.getValue()});
-                            sendTo(DynamoRing.preferenceListForNode(coordinator), Payload.insert(myPort, entry.getKey(), entry.getValue(), REPLICA));
+                if (waitForCompletion(coordinatorQuery.getSessionId(), TIMEOUT, TimeUnit.MILLISECONDS)) {
+                    Log.d(TAG, "Received Query Replies from Coordinator");
+                } else {
+                    Log.w(TAG, "TimedOut while waiting for Query Replies from Coordinator");
+                }
+
+                if (waitForCompletion(replicaQuery1.getSessionId(), TIMEOUT, TimeUnit.MILLISECONDS)) {
+                    Log.d(TAG, "Received Query Replies from first replica");
+                } else {
+                    Log.w(TAG, "TimedOut while waiting from first replica");
+                }
+
+                Set<UUID> querySessions = new LinkedHashSet<>(3);
+                querySessions.add(replicaQuery2.getSessionId());
+                querySessions.add(coordinatorQuery.getSessionId());
+                querySessions.add(replicaQuery1.getSessionId());
+
+                Set<Payload.Value> valueSet = new HashSet<>(3);
+                long latestVersion = Long.MIN_VALUE;
+                String latestValue = "";
+
+                for (UUID session : querySessions) {
+                    for (Payload.Value v : REPLIES.get(session).values()) {
+                        if (v.getVersion() > latestVersion) {
+                            latestVersion = v.getVersion();
+                            latestValue = v.getValue();
                         }
-                        return result;
-                    } else {
-                        Log.w(TAG, "TimedOut while waiting for Query Replies from Coordinator");
-
-                        if (waitForCompletion(replicaQuery2.getSessionId(), TIMEOUT * 2, TimeUnit.MILLISECONDS)) {
-                            Log.d(TAG, "Received Query Replies from replicaQuery2");
-                            MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
-                            for (Map.Entry<String, String> entry : REPLIES.get(replicaQuery2.getSessionId()).entrySet()) {
-                                result.addRow(new String[]{entry.getKey(), entry.getValue()});
-                                sendTo(DynamoRing.preferenceListForNode(coordinator), Payload.insert(myPort, entry.getKey(), entry.getValue(), REPLICA));
-                            }
-                            return result;
-                        } else {
-                            Log.e(TAG, "TimedOut while waiting for ALL nodes");
-
-                            return db.query(key);
-                        }
+                        valueSet.add(v);
                     }
                 }
-//                }
 
-//                if (coordinator.equals(myPort)) {
-//                    Log.d(TAG, "QUERY for key " + key);
-//
-//                    MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
-//                    Payload replicaQuery = track(Payload.queryRequest(myPort, key, REPLICA), 2);
-//
-//                    sendTo(replicas, replicaQuery);
-//
-//                    // wait for reply from replica's
-//                    if (waitForCompletion(replicaQuery.getSessionId(), TIMEOUT, TimeUnit.MILLISECONDS)) {
-//                        Log.d(TAG, "Received Query Replies from Replica's");
-//                    } else {
-//                        Log.d(TAG, "TimedOut while waiting for Query Replies from Replica's");
-//                    }
-//
-//                    for (Map.Entry<String, String> entry : REPLIES.get(replicaQuery.getSessionId()).entrySet()) {
-//                        result.addRow(new String[]{entry.getKey(), entry.getValue()});
-//                    }
-//
-//                    Map<String, String> localResults = new HashMap<>();
-//                    try (Cursor cursor = db.query(key)) {
-//                        while (cursor.moveToNext()) {
-//                            result.addRow(new String[]{cursor.getString(0), cursor.getString(1)});
-//                            localResults.put(cursor.getString(0), cursor.getString(1));
-//                        }
-//                    }
-//
-//                    if (localResults.isEmpty()) {
-//                        if (!REPLIES.get(replicaQuery.getSessionId()).isEmpty()) {
-//                            for (Map.Entry<String, String> entry : REPLIES.get(replicaQuery.getSessionId()).entrySet()) {
-//                                dbInsert(entry);
-//                            }
-//                        }
-//                    }
-//
-//                    return result;
-//                } else {
-//                    Payload query = track(Payload.queryRequest(myPort, key, COORDINATOR));
-//
-//                    Log.d(TAG, "QUERY Coordinator for key " + key);
-//
-//                    sendTo(coordinator, query);
-//
-//                    // wait for query replies
-//                    if (waitForCompletion(query.getSessionId(), TIMEOUT, TimeUnit.MILLISECONDS)) {
-//                        Map<String, String> resultMap = REPLIES.get(query.getSessionId());
-//                        if (resultMap.isEmpty()) {
-//                            Log.w(TAG, "QUERY COORDINATOR, watch out for inconsistencies");
-//                        } else {
-//                            Log.d(TAG, "Received Query Replies from Coordinator" + resultMap);
-//
-//                        }
-//                        MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
-//
-//                        for (Map.Entry<String, String> entry : resultMap.entrySet()) {
-//                            result.addRow(new String[]{entry.getKey(), entry.getValue()});
-//                            if (isReplica) {
-//                                dbInsert(entry);
-//                            }
-//                        }
-//
-//                        Log.d(TAG, "After Received Query Replies from Coordinator" + resultMap);
-//
-//                        return result;
-//                    } else {
-//                        Log.d(TAG, "QUERY TIMED-OUT for coordinator: " + query);
-//                        // timed out, i.e coordinator is down
-//                        // forward to replicas.
-//
-//                        MatrixCursor result = new MatrixCursor(new String[]{"key", "value"});
-//                        Payload replicaQuery = track(Payload.queryRequest(myPort, key, REPLICA), 2);
-//
-//                        sendTo(replicas, replicaQuery);
-//
-//                        // wait for reply from replica's
-//                        if (waitForCompletion(replicaQuery.getSessionId(), 4, TimeUnit.SECONDS)) {
-//                            Log.d(TAG, "Received Query Replies from Replica's");
-//                        } else {
-//                            Log.d(TAG, "TimedOut while waiting for Query Replies from Replica's");
-//                        }
-//
-//                        for (Map.Entry<String, String> entry : REPLIES.get(replicaQuery.getSessionId()).entrySet()) {
-//                            result.addRow(new String[]{entry.getKey(), entry.getValue()});
-//                            if (isReplica) {
-//                                dbInsert(entry);
-//                            }
-//                        }
-//
-//                        return result;
-//                    }
-//                }
+                if (valueSet.size() > 1) {
+                    Log.d(TAG, key + " Latest value: " + latestValue + " from: " + valueSet);
+                }
+                result.addRow(new String[]{key, latestValue});
+                if (latestVersion > Long.MIN_VALUE) {
+                    sendTo(DynamoRing.preferenceListForKey(key), Payload.insert(myPort, key, latestValue, REPLICA, latestVersion));
+                }
+                return result;
             }
         }
     }
@@ -594,7 +450,7 @@ public class Dynamo {
     private synchronized void waitForRecovery() {
         if (recoverySessionId != null) {
             Log.d(TAG, "WAITING FOR RECOVERY");
-            if (waitForCompletion(recoverySessionId, 10, TimeUnit.SECONDS)) {
+            if (waitForCompletion(recoverySessionId, 5, TimeUnit.SECONDS)) {
                 Log.d(TAG, "RECOVERY COMPLETED");
             } else {
                 Log.d(TAG, "RECOVERY TIMED-OUT");
@@ -620,15 +476,15 @@ public class Dynamo {
     }
 
 
-    private Payload track(Payload in, int count) {
-        SESSIONS.put(in.getSessionId(), new Semaphore(-1 * (count - 1), true));
-        REPLIES.put(in.getSessionId(), new ConcurrentHashMap<String, String>(0));
+    private Payload track(Payload in, int replyCount) {
+        SESSIONS.put(in.getSessionId(), new Semaphore(-1 * (replyCount - 1), true)); // replyCount->permits
+        REPLIES.put(in.getSessionId(), new ConcurrentHashMap<String, Payload.Value>(0));
         return in;
     }
 
     private Payload track(Payload in) {
         SESSIONS.put(in.getSessionId(), new Semaphore(0, true));
-        REPLIES.put(in.getSessionId(), new ConcurrentHashMap<String, String>(0));
+        REPLIES.put(in.getSessionId(), new ConcurrentHashMap<String, Payload.Value>(0));
         return in;
     }
 
@@ -639,10 +495,11 @@ public class Dynamo {
         Log.d(TAG, "Sent ACK to:" + fromPort + ": " + payload);
     }
 
-    private void dbInsert(Map.Entry<String, String> entry) {
+    private void dbInsert(Map.Entry<String, Payload.Value> entry) {
         ContentValues cv = new ContentValues(1);
         cv.put("key", entry.getKey());
-        cv.put("value", entry.getValue());
+        cv.put("value", entry.getValue().getValue());
+        cv.put("version", entry.getValue().getVersion());
         db.insert(cv);
         Log.d(TAG, "Inserted: " + cv);
     }
@@ -651,20 +508,26 @@ public class Dynamo {
         ContentValues cv = new ContentValues(1);
         cv.put("key", payload.getKey());
         cv.put("value", payload.getValue());
+        cv.put("version", payload.getVersion());
         db.insert(cv);
         Log.d(TAG, "Inserted: " + cv);
     }
 
-    private void sendTo(Collection<String> nodes, Payload p) {
-//        Pair[] payloads = new Pair[nodes.size()];
-//        int i = 0;
-        for (String node : nodes) {
-//            Log.d(TAG, "Sending to: " + nodes + " : " + p);
-            sendTo(node, p);
-//            payloads[i] = new Pair<>(node, p);
-//            i++;
+    private long newVersionNumber(String key) {
+        long versionL = 1;
+        try (Cursor cursor = db.version(key)) {
+            while (cursor.moveToNext()) {
+                versionL = cursor.getLong(0) + 1;
+                Log.d(TAG, "NEW VERSION: " + versionL + " " + key);
+            }
         }
-//        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, payloads);
+        return versionL;
+    }
+
+    private void sendTo(Collection<String> nodes, Payload p) {
+        for (String node : nodes) {
+            sendTo(node, p);
+        }
     }
 
     private void sendTo(String node, Payload p) {

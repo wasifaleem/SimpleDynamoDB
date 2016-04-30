@@ -21,8 +21,11 @@ public class Payload {
     private String fromPort;
     private String key;
     private String value;
-    private Map<String, String> queryResults = new HashMap<>();
+
+    private Map<String, Value> queryResults = new HashMap<>();
+
     private boolean ack = false;
+    private long version = 1;
 
     public Payload() {
     }
@@ -36,6 +39,7 @@ public class Payload {
         this.key = copy.key;
         this.value = copy.value;
         this.queryResults = copy.queryResults;
+        this.version = copy.version;
     }
 
     public String serialize() {
@@ -48,8 +52,17 @@ public class Payload {
                     .put("ack", ack)
                     .put("key", key)
                     .put("value", value)
-                    .put("queryResults", new JSONObject(queryResults));
-            return jsonObject.toString();
+                    .put("version", version);
+
+            JSONObject object = new JSONObject();
+            for (Map.Entry<String, Value> e : queryResults.entrySet()) {
+                object.put(e.getKey(), new JSONObject().put("value", e.getValue().getValue()).put("version", e.getValue().getVersion()));
+            }
+            jsonObject.put("queryResults", object);
+
+            String json = jsonObject.toString();
+//            Log.d(TAG, "JSON serialized: " + json);
+            return json;
         } catch (JSONException e) {
             Log.e(TAG, "Cannot serialize payload " + toString(), e);
         }
@@ -83,12 +96,16 @@ public class Payload {
             if (!jsonObject.isNull("value")) {
                 payload.value = jsonObject.getString("value");
             }
+            if (!jsonObject.isNull("version")) {
+                payload.version = jsonObject.getLong("version");
+            }
             if (!jsonObject.isNull("queryResults")) {
                 JSONObject queryResults = jsonObject.getJSONObject("queryResults");
                 Iterator<String> keys = queryResults.keys();
                 while (keys.hasNext()) {
                     String key = keys.next();
-                    payload.queryResults.put(key, queryResults.getString(key));
+                    JSONObject value = queryResults.getJSONObject(key);
+                    payload.queryResults.put(key, new Value(value.getString("value"), value.getLong("version")));
                 }
             }
             return payload;
@@ -107,6 +124,12 @@ public class Payload {
     public Payload ack(boolean ack) {
         Payload payload = new Payload(this);
         payload.ack = ack;
+        return payload;
+    }
+
+    public Payload version(long version) {
+        Payload payload = new Payload(this);
+        payload.version = version;
         return payload;
     }
 
@@ -136,13 +159,14 @@ public class Payload {
         COORDINATOR, REPLICA, ALL
     }
 
-    public static Payload insert(String fromPort, String key, String value, NodeType nodeType) {
+    public static Payload insert(String fromPort, String key, String value, NodeType nodeType, long version) {
         Payload payload = new Payload();
         payload.fromPort = fromPort;
         payload.key = key;
         payload.value = value;
         payload.messageType = MessageType.INSERT;
         payload.nodeType = nodeType;
+        payload.version = version;
         return payload;
     }
 
@@ -219,11 +243,11 @@ public class Payload {
         this.value = value;
     }
 
-    public Map<String, String> getQueryResults() {
+    public Map<String, Value> getQueryResults() {
         return queryResults;
     }
 
-    public void setQueryResults(Map<String, String> queryResults) {
+    public void setQueryResults(Map<String, Value> queryResults) {
         this.queryResults = queryResults;
     }
 
@@ -235,12 +259,21 @@ public class Payload {
         this.ack = ack;
     }
 
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         Payload payload = (Payload) o;
         return ack == payload.ack &&
+                version == payload.version &&
                 Objects.equals(sessionId, payload.sessionId) &&
                 messageType == payload.messageType &&
                 nodeType == payload.nodeType &&
@@ -252,21 +285,71 @@ public class Payload {
 
     @Override
     public int hashCode() {
-        return Objects.hash(sessionId, messageType, nodeType, fromPort, key, value, queryResults, ack);
+        return Objects.hash(sessionId, messageType, nodeType, fromPort, key, value, queryResults, ack, version);
     }
 
     @Override
     public String toString() {
         final StringBuilder sb = new StringBuilder("Payload{");
-        sb.append("{mt=").append(messageType);
-        sb.append(", nt=").append(nodeType);
+        sb.append("sessionId=").append(sessionId);
+        sb.append(", messageType=").append(messageType);
+        sb.append(", nodeType=").append(nodeType);
+        sb.append(", fromPort='").append(fromPort).append('\'');
+        sb.append(", key='").append(key).append('\'');
+        sb.append(", value='").append(value).append('\'');
+        sb.append(", queryResults=").append(queryResults);
         sb.append(", ack=").append(ack);
-        sb.append(", s=").append(sessionId);
-        sb.append(", f='").append(fromPort).append('\'');
-        sb.append(", k='").append(key).append('\'');
-        sb.append(", v='").append(value).append('\'');
-        sb.append(", r=").append(queryResults);
+        sb.append(", version=").append(version);
         sb.append('}');
         return sb.toString();
+    }
+
+    public static class Value {
+        private String value;
+        private long version;
+
+        public Value(String value, long version) {
+            this.value = value;
+            this.version = version;
+        }
+
+        public String getValue() {
+            return value;
+        }
+
+        public void setValue(String value) {
+            this.value = value;
+        }
+
+        public long getVersion() {
+            return version;
+        }
+
+        public void setVersion(long version) {
+            this.version = version;
+        }
+
+        @Override
+        public String toString() {
+            final StringBuilder sb = new StringBuilder("Value{");
+            sb.append("value='").append(value).append('\'');
+            sb.append(", version=").append(version);
+            sb.append('}');
+            return sb.toString();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Value value1 = (Value) o;
+            return version == value1.version &&
+                    Objects.equals(value, value1.value);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(value, version);
+        }
     }
 }

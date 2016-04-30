@@ -55,7 +55,7 @@ public class DynamoRing {
                         buffer.append(HASH_NODE.get(next));
                     }
                     if (it.hasNext()) {
-                        buffer.append(" -> ");
+                        buffer.append(" -> "); // pretty print
                     }
                 }
                 buffer.append(']');
@@ -111,7 +111,7 @@ public class DynamoRing {
         return HASH_NODE.get(RING.get(0));
     }
 
-    public static List<String> replicasForCoordinator(String coordinator) { // also known as preference-list
+    public static List<String> replicasForCoordinator(String coordinator) {
         int coordinatorIndex = RING.indexOf(NODES_HASH.get(coordinator));
         List<String> replicas = new ArrayList<>(N - 1);
         for (int i = 1; i <= (N - 1); i++) {
@@ -124,10 +124,16 @@ public class DynamoRing {
     public static List<String> recoveryNodes(String port) {
         int index = RING.indexOf(NODES_HASH.get(port));
         List<String> nodes = new ArrayList<>(4);
-        nodes.add(HASH_NODE.get(RING.get(index + 2)));
-        nodes.add(HASH_NODE.get(RING.get(index + 1)));
-        nodes.add(HASH_NODE.get(RING.get(index - 2)));
-        nodes.add(HASH_NODE.get(RING.get(index - 1)));
+        // add successors/replicas
+        for (int i = 1; i <= (N - 1); i++) {
+            String node = HASH_NODE.get(RING.get(index + i));
+            nodes.add(node);
+        }
+        // add predecessors
+        for (int i = (N - 1); i > 0; i--) {
+            String node = HASH_NODE.get(RING.get(index - i));
+            nodes.add(node);
+        }
         Log.d(TAG, "Recovery nodes for: " + port + " : " + nodes);
         return nodes;
     }

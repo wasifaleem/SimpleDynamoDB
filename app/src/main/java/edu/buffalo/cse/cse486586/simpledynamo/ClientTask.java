@@ -13,7 +13,7 @@ import java.util.Set;
 
 public class ClientTask extends AsyncTask<Pair<String, Payload>, Void, Set<ClientTask.Result>> {
     private static final String TAG = ClientTask.class.getName();
-    public static final int TIMEOUT = 500;
+    public static final int TIMEOUT = 800;
 
     @Override
     protected Set<ClientTask.Result> doInBackground(Pair<String, Payload>... payloads) { // <to, payload>
@@ -21,23 +21,23 @@ public class ClientTask extends AsyncTask<Pair<String, Payload>, Void, Set<Clien
 
         for (Pair<String, Payload> payloadPair : payloads) {
             String node = payloadPair.first;
-
-            try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress("10.0.2.2", Integer.parseInt(node)), TIMEOUT);
-                OutputStream out = socket.getOutputStream();
-                String serialized = payloadPair.second.serialize();
-                if (serialized != null) {
+            String serialized = payloadPair.second.serialize();
+            if (serialized != null && !serialized.isEmpty()) {
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress("10.0.2.2", Integer.parseInt(node)), TIMEOUT);
+                    OutputStream out = socket.getOutputStream();
                     out.write(serialized.getBytes(StandardCharsets.UTF_8));
                     out.flush();
                     results.add(new Result(true, node));
+                    out.close();
+                } catch (Exception e) {
+                    results.add(new Result(false, node));
+                    Log.e(TAG, "ClientTask socket Exception" + " while sending to " + node, e); // offline?
                 }
-                out.close();
-            } catch (Exception e) {
-                results.add(new Result(false, node));
-                Log.e(TAG, "ClientTask socket Exception" + " while sending to " + node, e); // offline?
+            } else {
+                Log.d(TAG, "EMPTY payload not sent: " + serialized);
             }
         }
-
         return results;
     }
 
