@@ -156,7 +156,7 @@ public class Payload {
     }
 
     enum NodeType {
-        COORDINATOR, REPLICA, ALL
+        COORDINATOR, REPLICA, UPDATE, ALL
     }
 
     public static Payload insert(String fromPort, String key, String value, NodeType nodeType, long version) {

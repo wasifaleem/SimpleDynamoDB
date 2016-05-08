@@ -118,13 +118,13 @@ public class Dynamo {
                         }
                         break;
                     }
-                    case REPLICA: {
+                    default: {
                         if (payload.isAck()) {
                             // Send ack if requested.
                             sendAck(payload);
                         }
                         boolean fromCoordinator = DynamoRing.coordinatorForKey(payload.getKey()).equals(payload.getFromPort());
-                        if (!fromCoordinator) {
+                        if (!fromCoordinator && payload.getNodeType() == REPLICA) {
                             payload = payload.version(newVersionNumber(payload.getKey()));
                         }
 
@@ -226,7 +226,15 @@ public class Dynamo {
             case RECOVERY_REPLY: {
                 Log.d(TAG, "RECOVERY REPLY from:" + payload.getFromPort() + ": " + payload);
                 for (Map.Entry<String, Payload.Value> entry : payload.getQueryResults().entrySet()) {
-                    dbInsert(entry);
+                    long version = Long.MIN_VALUE;
+                    try (Cursor cursor = db.query(entry.getKey())) {
+                        while (cursor.moveToNext()) {
+                            version = cursor.getLong(cursor.getColumnIndex("version"));
+                        }
+                    }
+                    if (entry.getValue().getVersion() >= version) {
+                        dbInsert(entry);
+                    }
                 }
                 SESSIONS.get(payload.getSessionId()).release();
                 break;
@@ -440,7 +448,7 @@ public class Dynamo {
                 }
                 result.addRow(new String[]{key, latestValue});
                 if (latestVersion > Long.MIN_VALUE) {
-                    sendTo(DynamoRing.preferenceListForKey(key), Payload.insert(myPort, key, latestValue, REPLICA, latestVersion));
+                    sendTo(DynamoRing.preferenceListForKey(key), Payload.insert(myPort, key, latestValue, Payload.NodeType.UPDATE, latestVersion));
                 }
                 return result;
             }
